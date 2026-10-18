@@ -31,7 +31,60 @@ window.__ModuleLoader__.load({
     const holidayDays = new Set(FALLBACK_HOLIDAYS);
     const knownYears = new Set([2026]);
     const holidayListeners = new Set();
-    const holidayEndpoint = (year) => `https://cdn.jsdelivr.net/gh/NateScarlet/holiday-cn@master/${String(year)}.json`;
+    const HOLIDAY_TIMEOUT_MS = 6000;
+
+    function parseHolidayCn(payload, year) {
+      if (payload === null || typeof payload !== 'object' || payload.year !== year) return [];
+      const days = Array.isArray(payload.days) ? payload.days : [];
+      return days
+        .filter((day) => day !== null && typeof day === 'object' && day.isOffDay === true
+          && typeof day.date === 'string' && day.date.startsWith(`${year}-`))
+        .map((day) => day.date);
+    }
+
+    function parseTimor(payload, year) {
+      if (payload === null || typeof payload !== 'object' || payload.code !== 0
+        || payload.holiday === null || typeof payload.holiday !== 'object') return [];
+      return Object.values(payload.holiday)
+        .filter((day) => day !== null && typeof day === 'object' && day.holiday === true
+          && typeof day.date === 'string' && day.date.startsWith(`${year}-`))
+        .map((day) => day.date);
+    }
+
+    /** GitHub first, then a global CDN, a mainland API, and a GitHub proxy. */
+    const holidayChannels = [
+      {
+        id: 'github',
+        url: (year) => `https://raw.githubusercontent.com/NateScarlet/holiday-cn/master/${String(year)}.json`,
+        parse: parseHolidayCn,
+      },
+      {
+        id: 'jsdelivr',
+        url: (year) => `https://cdn.jsdelivr.net/gh/NateScarlet/holiday-cn@master/${String(year)}.json`,
+        parse: parseHolidayCn,
+      },
+      {
+        id: 'timor',
+        url: (year) => `https://timor.tech/api/holiday/year/${String(year)}`,
+        parse: parseTimor,
+      },
+      {
+        id: 'ghproxy',
+        url: (year) => `https://ghproxy.net/https://raw.githubusercontent.com/NateScarlet/holiday-cn/master/${String(year)}.json`,
+        parse: parseHolidayCn,
+      },
+    ];
+
+    async function fetchHoliday(url) {
+      if (typeof AbortController !== 'function') return fetch(url);
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), HOLIDAY_TIMEOUT_MS);
+      try {
+        return await fetch(url, { signal: controller.signal });
+      } finally {
+        clearTimeout(timer);
+      }
+    }
 
     function publishHolidayDays(dates) {
       let changed = false;
@@ -44,7 +97,7 @@ window.__ModuleLoader__.load({
       if (changed) for (const listener of holidayListeners) listener();
     }
 
-    /** Load only the current Beijing year, once; another year is a new fetch. */
+    /** Load only the current Beijing year, once, from the first channel that answers. */
     let holidayPending = false;
     async function refreshHolidayDays(now) {
       if (holidayPending || typeof fetch !== 'function') return;
@@ -52,19 +105,19 @@ window.__ModuleLoader__.load({
       if (knownYears.has(year)) return;
       holidayPending = true;
       try {
-        const response = await fetch(holidayEndpoint(year));
-        if (!response.ok) return;
-        const payload = await response.json();
-        if (payload?.year !== year) return;
-        const days = Array.isArray(payload.days) ? payload.days : [];
-        const offDays = days
-          .filter((day) => day !== null && typeof day === 'object' && day.isOffDay === true && typeof day.date === 'string' && day.date.startsWith(`${year}-`))
-          .map((day) => day.date);
-        if (offDays.length === 0) return;
-        knownYears.add(year);
-        publishHolidayDays(offDays);
-      } catch {
-        // Offline or blocked: keep whatever is already known.
+        for (const channel of holidayChannels) {
+          try {
+            const response = await fetchHoliday(channel.url(year));
+            if (!response.ok) continue;
+            const offDays = channel.parse(await response.json(), year);
+            if (offDays.length === 0) continue;
+            knownYears.add(year);
+            publishHolidayDays(offDays);
+            return;
+          } catch {
+            // Unreachable or blocked: try the next channel.
+          }
+        }
       } finally {
         holidayPending = false;
       }

@@ -39,8 +39,55 @@ const PRICING = {
 const holidayDays = new Set(FALLBACK_HOLIDAYS);
 const fetchedYears = new Set([2026]);
 
-/** Public, CORS-enabled dataset of State Council holiday arrangements. */
-const holidayEndpoint = (year) => `https://cdn.jsdelivr.net/gh/NateScarlet/holiday-cn@master/${String(year)}.json`;
+/** Read the holiday-cn shape: `{ year, days: [{ date, isOffDay }] }`. */
+export function parseHolidayCn(payload, year) {
+  if (payload === null || typeof payload !== 'object' || payload.year !== year) return [];
+  const days = Array.isArray(payload.days) ? payload.days : [];
+  return days
+    .filter((day) => day !== null && typeof day === 'object' && day.isOffDay === true
+      && typeof day.date === 'string' && day.date.startsWith(`${year}-`))
+    .map((day) => day.date);
+}
+
+/** Read the timor.tech shape: `{ code, holiday: { 'MM-DD': { date, holiday } } }`. */
+export function parseTimor(payload, year) {
+  if (payload === null || typeof payload !== 'object' || payload.code !== 0
+    || payload.holiday === null || typeof payload.holiday !== 'object') return [];
+  return Object.values(payload.holiday)
+    .filter((day) => day !== null && typeof day === 'object' && day.holiday === true
+      && typeof day.date === 'string' && day.date.startsWith(`${year}-`))
+    .map((day) => day.date);
+}
+
+/**
+ * Holiday sources in preference order: GitHub first, then a global CDN, then a
+ * mainland-accessible API for networks where GitHub and jsDelivr are blocked,
+ * then a GitHub proxy. Every source is CORS-enabled for the browser half.
+ */
+export const HOLIDAY_CHANNELS = [
+  {
+    id: 'github',
+    url: (year) => `https://raw.githubusercontent.com/NateScarlet/holiday-cn/master/${String(year)}.json`,
+    parse: parseHolidayCn,
+  },
+  {
+    id: 'jsdelivr',
+    url: (year) => `https://cdn.jsdelivr.net/gh/NateScarlet/holiday-cn@master/${String(year)}.json`,
+    parse: parseHolidayCn,
+  },
+  {
+    id: 'timor',
+    url: (year) => `https://timor.tech/api/holiday/year/${String(year)}`,
+    parse: parseTimor,
+  },
+  {
+    id: 'ghproxy',
+    url: (year) => `https://ghproxy.net/https://raw.githubusercontent.com/NateScarlet/holiday-cn/master/${String(year)}.json`,
+    parse: parseHolidayCn,
+  },
+];
+
+const HOLIDAY_TIMEOUT_MS = 6000;
 
 const bjDate = (ms) => new Date(ms + BEIJING_OFFSET_MS);
 const bjDay = (ms) => bjDate(ms).toISOString().slice(0, 10);
@@ -54,9 +101,9 @@ export function beijingYear(ms) {
  * Load the current Beijing year's off-days once.
  *
  * One fetch per year is enough: the schedule does not change after publication,
- * and a later year only needs loading once it becomes current. A year whose
- * announcement is not out yet returns an empty `days` array and is retried on
- * the next call; a payload naming another year is ignored.
+ * and a later year only needs loading once it becomes current. Channels are
+ * tried in order until one answers with a non-empty, same-year schedule; a year
+ * whose announcement is not out yet stays unknown and is retried later.
  *
  * @param now - reference time in epoch milliseconds.
  * @param fetchImpl - fetch implementation, injectable for tests.
@@ -66,23 +113,20 @@ export async function refreshHolidays(now = Date.now(), fetchImpl = globalThis.f
   const year = beijingYear(now);
   if (fetchedYears.has(year)) return false;
   if (typeof fetchImpl !== 'function') return false;
-  try {
-    const response = await fetchImpl(holidayEndpoint(year), { signal: AbortSignal.timeout(8000) });
-    if (!response.ok) return false;
-    const payload = await response.json();
-    if (payload?.year !== year) return false;
-    const days = Array.isArray(payload.days) ? payload.days : [];
-    const offDays = days
-      .filter((day) => day !== null && typeof day === 'object' && day.isOffDay === true && typeof day.date === 'string' && day.date.startsWith(`${year}-`))
-      .map((day) => day.date);
-    if (offDays.length === 0) return false;
-    for (const date of offDays) holidayDays.add(date);
-    fetchedYears.add(year);
-    return true;
-  } catch {
-    // Offline or blocked: the built-in list stays authoritative.
-    return false;
+  for (const channel of HOLIDAY_CHANNELS) {
+    try {
+      const response = await fetchImpl(channel.url(year), { signal: AbortSignal.timeout(HOLIDAY_TIMEOUT_MS) });
+      if (!response.ok) continue;
+      const offDays = channel.parse(await response.json(), year);
+      if (offDays.length === 0) continue;
+      for (const date of offDays) holidayDays.add(date);
+      fetchedYears.add(year);
+      return true;
+    } catch {
+      // Unreachable or blocked: try the next channel.
+    }
   }
+  return false;
 }
 
 /** @param ms - epoch milliseconds @param days - off-day set @returns whether Beijing wall time is peak. */

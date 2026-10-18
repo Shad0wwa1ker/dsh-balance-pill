@@ -44,11 +44,17 @@ If the projection is unavailable (older Host, or a profile without `sessionProje
 
 Weekends are computed, so they work for every year. Statutory holidays are announced per year, so the plugin does not pretend to know them all:
 
-- The current Beijing year is fetched **once** from `https://cdn.jsdelivr.net/gh/NateScarlet/holiday-cn@master/<year>.json`: the Host at start and on a daily check, the browser on load. A year already known is never fetched again.
-- When the year rolls over, the new year is fetched once; until its announcement is published the file has an empty `days` list, so it stays "unknown" and is retried, never cached as holiday-free.
-- A payload whose `year` does not match the requested year is ignored.
-- Any failure (offline, blocked CDN) keeps the built-in 2026 list; 2027-01-01 is the one certain date beyond it.
-- 2027 is currently published as an empty schedule (the State Council announcement is not out yet), so weekdays in 2027 count as peak until that file fills in. Weekends are still off-peak.
+- The current Beijing year is fetched **once**, trying sources in order until one answers with a non-empty, same-year schedule:
+  1. GitHub raw (`raw.githubusercontent.com/NateScarlet/holiday-cn`), the authoritative dataset;
+  2. jsDelivr's GitHub mirror;
+  3. **timor.tech** — a mainland-accessible holiday API, used when GitHub and jsDelivr are blocked (its payload is normalized to dates);
+  4. ghproxy.net as a last GitHub proxy.
+
+  The Host tries on start and on a daily check, the browser on load. A year already known is never fetched again.
+- When the year rolls over, the new year is fetched once; until its announcement is published the source has an empty schedule, so it stays "unknown" and is retried, never cached as holiday-free.
+- A payload whose year does not match the request, or a source with no usable dates, falls through to the next channel.
+- Any failure across every channel (offline, blocked) keeps the built-in 2026 list; 2027-01-01 is the one certain date beyond it.
+- 2027 is currently published as an empty schedule (the State Council announcement is not out yet), so weekdays in 2027 count as peak until that data fills in. Weekends are still off-peak.
 
 The dataset only supplies dates and holiday names; no request carries account data.
 
