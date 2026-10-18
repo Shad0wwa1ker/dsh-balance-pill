@@ -50,6 +50,7 @@ window.__ModuleLoader__.load({
         'title.grantedDetail': '充值 {topped} ＋ 赠送 {granted}',
         'cost.inline': '本次 {amount}',
         'cost.title': '本会话估算：命中 {hit} tok／未命中 {miss} tok／输出 {out} tok，按 deepseek-flash {phase}价。跨峰谷的历史请求按当前时段统一计价。',
+        'cost.exact.title': '本会话逐请求计价：命中 {hit} tok／未命中 {miss} tok／输出 {out} tok，每条请求按其发生时的峰谷价计。',
       },
       en: {
         'phase.peak': 'Peak',
@@ -63,6 +64,7 @@ window.__ModuleLoader__.load({
         'title.grantedDetail': 'Topped up {topped} + granted {granted}',
         'cost.inline': 'Session {amount}',
         'cost.title': 'Session estimate: {hit} hit / {miss} miss / {out} output tokens at deepseek-flash {phase} rates. Requests spanning both windows are priced uniformly at the current one.',
+        'cost.exact.title': 'Session priced per request: {hit} hit / {miss} miss / {out} output tokens, each at the phase in effect when it was sent.',
       },
     };
 
@@ -238,7 +240,11 @@ window.__ModuleLoader__.load({
         const boundary = nextSwitch(now);
         const until = boundary === null ? '--' : formatBeijingTime(boundary);
         const amount = reading.wallet ? formatAmount(reading.wallet.total, reading.wallet.currency) : undefined;
-        const cost = usage ? estimateCost(usage, peak) : undefined;
+        const exact = project('sessionCost');
+        const exactCost = exact !== undefined && exact !== null && Number.isFinite(exact.cost) ? exact.cost : undefined;
+        const cost = exactCost !== undefined
+          ? exactCost
+          : usage ? estimateCost(usage, peak) : undefined;
         const costText = cost === undefined ? null : t('cost.inline', { amount: formatCost(cost) });
         const label = [
           amount === undefined ? null : t('balance.amount', { amount }),
@@ -251,12 +257,19 @@ window.__ModuleLoader__.load({
             granted: formatAmount(reading.wallet.granted, reading.wallet.currency),
           })
           : null;
-        const costDetail = usage ? t('cost.title', {
-          hit: formatTokens(usage.cacheReadTokens || 0),
-          miss: formatTokens((usage.uncachedInputTokens || 0) + (usage.cacheWriteTokens || 0)),
-          out: formatTokens(usage.outputTokens || 0),
-          phase,
-        }) : null;
+        const costTokens = exactCost !== undefined ? exact : usage;
+        const costDetail = costTokens === undefined ? null : exactCost !== undefined
+          ? t('cost.exact.title', {
+            hit: formatTokens(costTokens.cacheReadTokens || 0),
+            miss: formatTokens((costTokens.inputTokens || 0) + (costTokens.cacheWriteTokens || 0)),
+            out: formatTokens(costTokens.outputTokens || 0),
+          })
+          : t('cost.title', {
+            hit: formatTokens(usage.cacheReadTokens || 0),
+            miss: formatTokens((usage.uncachedInputTokens || 0) + (usage.cacheWriteTokens || 0)),
+            out: formatTokens(usage.outputTokens || 0),
+            phase,
+          });
         const title = [
           reading.status === 'unavailable'
             ? t('title.unknown')
