@@ -1,0 +1,3 @@
+- insert:
+    - id: balance-pill
+      name: '@local/dsh-balance-pill'
