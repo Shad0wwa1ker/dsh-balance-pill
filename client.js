@@ -191,6 +191,16 @@ window.__ModuleLoader__.load({
       pro: { hit: [0.15, 0.3], miss: [4.5, 9], output: [13.5, 27] },
     };
 
+    /** Search/Fetch bill per successful request from Beijing 2026-11-01 00:00. */
+    const SERVICE_PRICE = 5 / 1000;
+    const SERVICE_BILLING_START = Date.parse('2026-10-31T16:00:00Z');
+
+    /** Exact total: token cost plus the Search/Fetch part once billing starts. */
+    function totalCostOf(exact) {
+      if (exact === undefined || exact === null || !Number.isFinite(exact.cost)) return undefined;
+      return exact.cost + (Number.isFinite(exact.serviceCost) ? exact.serviceCost : 0);
+    }
+
     const DICTIONARIES = {
       zh: {
         'phase.peak': '峰时',
@@ -205,6 +215,8 @@ window.__ModuleLoader__.load({
         'cost.inline': '本次 {amount}',
         'cost.title': '本会话估算：命中 {hit} tok／未命中 {miss} tok／输出 {out} tok，按 deepseek-flash {phase}价。跨峰谷的历史请求按当前时段统一计价。',
         'cost.exact.title': '本会话逐请求计价：命中 {hit} tok／未命中 {miss} tok／输出 {out} tok，每条请求按其发生时的峰谷价计。',
+        'cost.services': 'Search {search} 次 · Fetch {fetch} 次，另计 ¥{amount}',
+        'cost.services.free': 'Search {search} 次 · Fetch {fetch} 次，11 月 1 日前免费',
         'settings.title': '刷新频率',
         'settings.label': '余额刷新间隔（秒）',
         'settings.hint': '范围 10–3600 秒，默认 60。每轮对话结束仍会额外刷新一次，这是上限之外的补充。',
@@ -226,6 +238,8 @@ window.__ModuleLoader__.load({
         'cost.inline': 'Session {amount}',
         'cost.title': 'Session estimate: {hit} hit / {miss} miss / {out} output tokens at deepseek-flash {phase} rates. Requests spanning both windows are priced uniformly at the current one.',
         'cost.exact.title': 'Session priced per request: {hit} hit / {miss} miss / {out} output tokens, each at the phase in effect when it was sent.',
+        'cost.services': 'Search {search} · Fetch {fetch} requests, ¥{amount} extra',
+        'cost.services.free': 'Search {search} · Fetch {fetch} requests, free until Nov 1',
         'settings.title': 'Refresh rate',
         'settings.label': 'Balance refresh interval (seconds)',
         'settings.hint': '10–3600 seconds, default 60. Each finished turn still triggers one extra refresh on top of it.',
@@ -416,9 +430,9 @@ window.__ModuleLoader__.load({
         const until = boundary === null ? '--' : formatBeijingTime(boundary);
         const amount = reading.wallet ? formatAmount(reading.wallet.total, reading.wallet.currency) : undefined;
         const exact = project('sessionCost');
-        const exactCost = exact !== undefined && exact !== null && Number.isFinite(exact.cost) ? exact.cost : undefined;
-        const cost = exactCost !== undefined
-          ? exactCost
+        const exactTotal = totalCostOf(exact);
+        const cost = exactTotal !== undefined
+          ? exactTotal
           : usage ? estimateCost(usage, peak) : undefined;
         const costText = cost === undefined ? null : t('cost.inline', { amount: formatCost(cost) });
         const label = [
@@ -432,8 +446,8 @@ window.__ModuleLoader__.load({
             granted: formatAmount(reading.wallet.granted, reading.wallet.currency),
           })
           : null;
-        const costTokens = exactCost !== undefined ? exact : usage;
-        const costDetail = costTokens === undefined ? null : exactCost !== undefined
+        const costTokens = exactTotal !== undefined ? exact : usage;
+        const costDetail = costTokens === undefined ? null : exactTotal !== undefined
           ? t('cost.exact.title', {
             hit: formatTokens(costTokens.cacheReadTokens || 0),
             miss: formatTokens((costTokens.inputTokens || 0) + (costTokens.cacheWriteTokens || 0)),
@@ -445,12 +459,21 @@ window.__ModuleLoader__.load({
             out: formatTokens(usage.outputTokens || 0),
             phase,
           });
+        const serviceRequests = exact ? (exact.searchRequests || 0) + (exact.fetchRequests || 0) : 0;
+        const serviceDetail = serviceRequests === 0
+          ? null
+          : t(exact.serviceCost > 0 ? 'cost.services' : 'cost.services.free', {
+            search: formatTokens(exact.searchRequests || 0),
+            fetch: formatTokens(exact.fetchRequests || 0),
+            amount: formatCost(exact.serviceCost || 0),
+          });
         const title = [
           reading.status === 'unavailable'
             ? t('title.unknown')
             : t(peak ? 'title.peak' : 'title.offPeak', { next: until }),
           detail,
           costDetail,
+          serviceDetail,
           t('title.refresh'),
         ].filter(Boolean).join(' · ');
 
@@ -562,7 +585,7 @@ window.__ModuleLoader__.load({
     return {
       inject: ['slots', 'locale', 'remote', 'remote.account'],
       /** Pure helpers, exported for verification outside the browser. */
-      __test: { isPeak, nextSwitch, formatAmount, sumWallets, estimateCost, formatCost, clampRefresh, refreshHolidayDays },
+      __test: { isPeak, nextSwitch, formatAmount, sumWallets, estimateCost, formatCost, clampRefresh, refreshHolidayDays, totalCostOf },
       apply(ctx) {
         ctx.effect(() => ctx.locale.register(NS, DICTIONARIES), 'balance-pill: dictionaries');
         void refreshHolidayDays(Date.now());

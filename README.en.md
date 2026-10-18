@@ -29,6 +29,15 @@ It shows the account balance, whether model pricing is currently at peak or off-
 | input, cache miss | ¥1 | ¥2 |
 | output | ¥4 | ¥8 |
 
+### Search and Fetch charges
+
+`web_search` and `web_fetch` call separate APIs billed **per successful request**: ¥5 per 1,000 requests for each API. The session figure counts them separately from tokens:
+
+- one `web_search` call bills once per distinct query (duplicates collapse, matching the tool's own fan-out rule);
+- one `web_fetch` call bills once when the page came back with a 2xx status;
+- error results, `No results found.`, and non-2xx fetches are not billed;
+- the requests are counted from the moment they happen, but **add nothing to the cost before Beijing 2026-11-01 00:00** — the free window DeepSeek announced for Harness calls. The hover text still shows the running Search/Fetch counts and marks them free; from that instant the same counts are charged at ¥0.005 each.
+
 ## Exact pricing
 
 The Host half folds the durable session log into one client-visible projection, `sessionCost`:
@@ -95,7 +104,7 @@ The refresh interval is edited in the plugin's details page (see **Settings**). 
 - **Holiday coverage follows the published schedule.** A date is only known to be a holiday after the State Council announcement exists in the dataset; until then a holiday weekday is priced as peak. Edit `FALLBACK_HOLIDAYS` or point the endpoints elsewhere if you need a different calendar.
 - **Model tier comes from the request header.** `deepseek-v4-pro` uses the Pro list; anything else is treated as flash. Custom models that bill differently will be mispriced.
 - **Balance is a snapshot.** It reflects Platform at the last refresh, so it can lag the messages you just sent by up to the configured interval.
-- **Search/Fetch calls are excluded.** They bill per request rather than per token and do not appear in the log's usage samples.
+- **Search/Fetch billing starts on 2026-11-01 00:00 Beijing time.** Before that instant the counts are shown but priced at zero. The count is per successful request: distinct queries for Search, 2xx pages for Fetch; an error or an empty search result is not billed. A multi-query call where only some queries returned results is counted as its query count, so it can slightly overstate.
 - **Non-DeepSeek routes** (for example Anthropic-compatible providers) are priced with DeepSeek rates; the pill is meant for a DeepSeek account.
 
 ## How it works

@@ -31,6 +31,15 @@
 | 输入，缓存未命中 | ¥1 | ¥2 |
 | 输出 | ¥4 | ¥8 |
 
+### Search / Fetch 费用
+
+`web_search` 与 `web_fetch` 走的是两个独立 API，**按成功请求次数计费**：各 ¥5 / 1,000 次。插件把它们与 token 费用分开统计：
+
+- 一次 `web_search` 按去重后的 query 数计费（与工具自身的并发 fan-out 规则一致）；
+- 一次 `web_fetch` 在页面返回 2xx 时计 1 次；
+- 报错结果、`No results found.`、非 2xx 的抓取都不计费；
+- 请求会实时计数，但在**北京时间 2026-11-01 00:00 之前不计入金额**（DeepSeek 公告的 Harness 调用免费期）。悬停提示会显示已发生的 Search/Fetch 次数并标注“免费”；过了这个时刻，同样的次数按每次 ¥0.005 计入。
+
 ## 真实计价是怎么做的
 
 Host 半边把持久会话日志折叠成一个对客户端可见的投影 `sessionCost`：
@@ -97,7 +106,7 @@ pnpm add link:/absolute/path/to/dsh-balance-pill
 - **节假日以已公布安排为准。** 国务院公告未发布前，工作日的节假日会按高峰计价；需要别的日历可改 `FALLBACK_HOLIDAYS` 或替换数据源地址。
 - **模型档位来自 request header。** `deepseek-v4-pro` 使用 Pro 价目表，其余按 flash 计；自定义模型若计费不同会算偏。
 - **余额是快照。** 反映的是最近一次刷新的平台余额，最多滞后一个刷新间隔。
-- **Search / Fetch 调用未计入。** 它们按次计费，不出现在日志的 token usage 里。
+- **Search / Fetch 自 2026-11-01 00:00（北京时间）起计费。** 之前只显示次数、金额按 0 计。次数按成功请求统计：Search 看去重后的 query 数，Fetch 看 2xx 页面；报错或空结果不计费。多 query 调用中只有部分 query 有结果时，会按 query 总数计，可能略微多算。
 - **非 DeepSeek 路由**（例如 Anthropic 兼容 provider）会按 DeepSeek 单价计算；本插件面向 DeepSeek 账号。
 
 ## 实现结构

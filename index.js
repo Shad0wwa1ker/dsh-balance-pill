@@ -36,6 +36,66 @@ const PRICING = {
   pro: { hit: [0.15, 0.3], miss: [4.5, 9], output: [13.5, 27] },
 };
 
+/**
+ * Search and Fetch are separate APIs billed per successful request (¥5 per
+ * 1,000). Harness calls are free until Beijing 2026-11-01 00:00, so requests
+ * made before that instant still count but add nothing to the cost.
+ */
+const SERVICE_PRICE = 5 / 1000;
+const SERVICE_BILLING_START = Date.parse('2026-10-31T16:00:00Z');
+
+/** Parse a tool call's JSON argument string, or undefined when malformed. */
+function parseArguments(raw) {
+  if (typeof raw !== 'string') return undefined;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Distinct, non-empty queries in one web_search call; duplicates run once. */
+function searchQueryCount(args) {
+  if (args === undefined || args === null || !Array.isArray(args.queries)) return 0;
+  const seen = new Set();
+  for (const query of args.queries) {
+    if (typeof query === 'string' && query.trim() !== '') seen.add(query);
+  }
+  return seen.size;
+}
+
+/** Joined text blocks of a tool result message. */
+function resultText(data) {
+  const content = data?.message?.content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .filter((block) => block !== null && typeof block === 'object' && block.type === 'text' && typeof block.text === 'string')
+    .map((block) => block.text)
+    .join('\n');
+}
+
+/**
+ * Whether one web tool result corresponds to a billable API request.
+ *
+ * Search charges only for non-empty result lists; Fetch charges only when the
+ * API returned page content with HTTP 200. Results are conservative: anything
+ * that looks like a failure is not billed.
+ */
+function billableRequests(kind, data, text) {
+  if (data?.message?.isError === true) return 0;
+  if (kind === 'search') {
+    const hasSources = text.includes('Sources:');
+    return !hasSources && text.includes('No results found.') ? 0 : 1;
+  }
+  if (kind === 'fetch') {
+    const match = /\(HTTP (\d{3})\)/.exec(text);
+    if (match === null) return 0;
+    const status = Number(match[1]);
+    return status >= 200 && status < 300 ? 1 : 0;
+  }
+  return 0;
+}
+
 const holidayDays = new Set(FALLBACK_HOLIDAYS);
 const fetchedYears = new Set([2026]);
 
@@ -187,6 +247,10 @@ export function init() {
     model: null,
     stepStart: null,
     last: null,
+    searchRequests: 0,
+    fetchRequests: 0,
+    serviceCost: 0,
+    pending: {},
   };
 }
 
@@ -245,6 +309,46 @@ export function fold(state, event) {
         last: { turn, step, cost, buckets },
       };
     }
+    case 'tool/call': {
+      const name = event.data?.name;
+      if (name !== 'web_search' && name !== 'web_fetch') return state;
+      const callId = event.data?.callId;
+      if (typeof callId !== 'string') return state;
+      const args = parseArguments(event.data?.arguments);
+      const count = name === 'web_search' ? searchQueryCount(args) : 1;
+      if (count === 0) return state;
+      return {
+        ...state,
+        pending: {
+          ...state.pending,
+          [callId]: { kind: name === 'web_search' ? 'search' : 'fetch', count, at: event.time },
+        },
+      };
+    }
+    case 'tool/result': {
+      const callId = event.data?.message?.toolCallId ?? event.data?.message?.source?.callId;
+      const entry = typeof callId === 'string' ? state.pending?.[callId] : undefined;
+      if (entry === undefined) return state;
+      const pending = { ...state.pending };
+      delete pending[callId];
+      const billable = billableRequests(entry.kind, event.data, resultText(event.data)) === 1 ? entry.count : 0;
+      if (billable === 0) return { ...state, pending };
+      const charged = typeof entry.at === 'number' && entry.at >= SERVICE_BILLING_START
+        ? billable * SERVICE_PRICE
+        : 0;
+      return {
+        ...state,
+        pending,
+        searchRequests: state.searchRequests + (entry.kind === 'search' ? billable : 0),
+        fetchRequests: state.fetchRequests + (entry.kind === 'fetch' ? billable : 0),
+        serviceCost: round(state.serviceCost + charged),
+      };
+    }
+    case 'turn/end': {
+      return state.pending === undefined || Object.keys(state.pending).length === 0
+        ? state
+        : { ...state, pending: {} };
+    }
     default:
       return state;
   }
@@ -257,7 +361,7 @@ const views = new WeakMap();
 
 export const sessionCostProjection = {
   key: 'sessionCost',
-  stateVersion: 1,
+  stateVersion: 2,
   stateSchema: passthrough,
   init,
   apply: fold,
@@ -273,6 +377,9 @@ export const sessionCostProjection = {
           cacheReadTokens: state.cacheReadTokens,
           cacheWriteTokens: state.cacheWriteTokens,
           model: state.model,
+          searchRequests: state.searchRequests,
+          fetchRequests: state.fetchRequests,
+          serviceCost: state.serviceCost,
           exact: true,
         };
         views.set(state, view);
