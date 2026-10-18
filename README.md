@@ -17,7 +17,8 @@ It shows the account balance, whether model pricing is currently at peak or off-
 | Session spend | `sessionCost` Host projection (fallback: `tokenUsage` estimate) | live, as each request settles |
 
 - Both wallet kinds are summed per currency (CNY preferred), because Platform bills them together and spends granted credit first. Hovering the pill breaks the total into recharge and granted amounts.
-- Peak windows follow the official rule: Beijing time, Monday–Friday, 09:00–12:00 and 14:00–18:00. Lunch breaks, weekends, and statutory holidays are off-peak all day. The 2026 State Council holiday list is built in.
+- Peak windows follow the official rule: Beijing time, Monday–Friday, 09:00–12:00 and 14:00–18:00. Lunch breaks, weekends, and statutory holidays are off-peak all day.
+- Holiday dates are not hardcoded to one year: both halves try to load the current and next year from the public [holiday-cn](https://github.com/NateScarlet/holiday-cn) dataset (generated from State Council announcements), and fall back to a built-in 2026 list when offline or before a year is published.
 - Each request is priced as `hit × hit_rate + (miss + cache_write) × miss_rate + output × output_rate`, per million tokens, at the rate in effect when that request's step started:
 
 | deepseek-flash | off-peak | peak |
@@ -36,6 +37,17 @@ The Host half folds the durable session log into one client-visible projection, 
 - Because the fold runs on the Host, paging and compaction never drop priced history.
 
 If the projection is unavailable (older Host, or a profile without `sessionProjections`), the browser falls back to the previous estimate: whole-session `tokenUsage` at the current phase.
+
+## Holiday data across years
+
+Weekends are computed, so they work for every year. Statutory holidays are announced per year, so the plugin does not pretend to know them all:
+
+- The Host fetches `https://cdn.jsdelivr.net/gh/NateScarlet/holiday-cn@master/<year>.json` for the current and next Beijing year at start and once a day. The browser does the same on load, only for years it does not already know.
+- A year whose announcement is not out yet returns an empty `days` list; it stays "unknown" and is retried, instead of being cached as holiday-free.
+- Any failure (offline, blocked CDN) keeps the built-in 2026 list; 2027-01-01 is the one certain date beyond it.
+- 2027 is currently published as an empty schedule (the State Council announcement is not out yet), so weekdays in 2027 count as peak until that file fills in. Weekends are still off-peak.
+
+The dataset only supplies dates and holiday names; no request carries account data.
 
 ## Install
 
@@ -67,6 +79,7 @@ None. Prices and the holiday list are constants near the top of both `index.js` 
 ## Accuracy notes
 
 - **The session figure prices each request at its own phase.** A request whose step starts before 12:00 stays at peak even if the answer lands after it. The billing timestamp is the step start, which is the closest durable event to when the request was sent.
+- **Holiday coverage follows the published schedule.** A date is only known to be a holiday after the State Council announcement exists in the dataset; until then a holiday weekday is priced as peak. Edit `FALLBACK_HOLIDAYS` or point the endpoints elsewhere if you need a different calendar.
 - **Model tier comes from the request header.** `deepseek-v4-pro` uses the Pro list; anything else is treated as flash. Custom models that bill differently will be mispriced.
 - **Balance is a snapshot.** It reflects Platform at the last refresh, so it can lag the messages you just sent by up to a minute.
 - **Search/Fetch calls are excluded.** They bill per request rather than per token and do not appear in the log's usage samples.

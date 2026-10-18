@@ -12,8 +12,12 @@
 const BEIJING_OFFSET_MS = 8 * 60 * 60 * 1000;
 const PEAK_WINDOWS = [[9 * 60, 12 * 60], [14 * 60, 18 * 60]];
 
-/** Statutory holidays as Beijing dates; a holiday is off-peak all day. */
-const HOLIDAYS = new Set([
+/**
+ * Built-in official holiday dates, used offline and until the Host refreshes.
+ * Years not listed here are refreshed from the holiday-cn dataset, which is
+ * generated from State Council announcements and gains a year when published.
+ */
+const FALLBACK_HOLIDAYS = [
   '2026-01-01', '2026-01-02', '2026-01-03',
   '2026-02-15', '2026-02-16', '2026-02-17', '2026-02-18', '2026-02-19',
   '2026-02-20', '2026-02-21', '2026-02-22', '2026-02-23',
@@ -24,7 +28,7 @@ const HOLIDAYS = new Set([
   '2026-10-01', '2026-10-02', '2026-10-03', '2026-10-04', '2026-10-05',
   '2026-10-06', '2026-10-07',
   '2027-01-01',
-]);
+];
 
 /** CNY per million tokens, indexed [off-peak, peak]. */
 const PRICING = {
@@ -32,15 +36,62 @@ const PRICING = {
   pro: { hit: [0.15, 0.3], miss: [4.5, 9], output: [13.5, 27] },
 };
 
+const holidayDays = new Set(FALLBACK_HOLIDAYS);
+const fetchedYears = new Set([2026]);
+
+/** Public, CORS-enabled dataset of State Council holiday arrangements. */
+const holidayEndpoint = (year) => `https://cdn.jsdelivr.net/gh/NateScarlet/holiday-cn@master/${String(year)}.json`;
+
 const bjDate = (ms) => new Date(ms + BEIJING_OFFSET_MS);
 const bjDay = (ms) => bjDate(ms).toISOString().slice(0, 10);
 
-/** @param ms - epoch milliseconds @returns whether Beijing wall time is peak. */
-export function isPeak(ms) {
+/** @param ms - epoch milliseconds @returns the Beijing calendar year. */
+export function beijingYear(ms) {
+  return bjDate(ms).getUTCFullYear();
+}
+
+/**
+ * Merge the published off-days of the current and next Beijing year.
+ *
+ * A year with no announcement yet returns an empty `days` array; it is retried
+ * on the next refresh instead of being recorded as known. Failures leave the
+ * built-in list in place.
+ *
+ * @param now - reference time in epoch milliseconds.
+ * @param fetchImpl - fetch implementation, injectable for tests.
+ * @returns whether any year was learned.
+ */
+export async function refreshHolidays(now = Date.now(), fetchImpl = globalThis.fetch) {
+  if (typeof fetchImpl !== 'function') return false;
+  const year = beijingYear(now);
+  const years = [year, year + 1].filter((value) => !fetchedYears.has(value));
+  let learned = false;
+  for (const value of years) {
+    try {
+      const response = await fetchImpl(holidayEndpoint(value), { signal: AbortSignal.timeout(8000) });
+      if (!response.ok) continue;
+      const payload = await response.json();
+      const days = Array.isArray(payload?.days) ? payload.days : [];
+      const offDays = days
+        .filter((day) => day !== null && typeof day === 'object' && day.isOffDay === true && typeof day.date === 'string')
+        .map((day) => day.date);
+      if (offDays.length === 0) continue;
+      for (const date of offDays) holidayDays.add(date);
+      fetchedYears.add(value);
+      learned = true;
+    } catch {
+      // Offline or blocked: the built-in list stays authoritative.
+    }
+  }
+  return learned;
+}
+
+/** @param ms - epoch milliseconds @param days - off-day set @returns whether Beijing wall time is peak. */
+export function isPeak(ms, days = holidayDays) {
   const d = bjDate(ms);
   const weekday = d.getUTCDay();
   if (weekday === 0 || weekday === 6) return false;
-  if (HOLIDAYS.has(bjDay(ms))) return false;
+  if (days.has(bjDay(ms))) return false;
   const minute = d.getUTCHours() * 60 + d.getUTCMinutes();
   return PEAK_WINDOWS.some(([from, to]) => minute >= from && minute < to);
 }
@@ -199,5 +250,17 @@ export function apply(ctx) {
     });
   } catch (error) {
     console.error('[balance-pill] sessionProjections injection unavailable', error);
+  }
+
+  try {
+    void refreshHolidays();
+    const daily = setInterval(() => void refreshHolidays(), 24 * 60 * 60 * 1000);
+    if (typeof ctx.effect === 'function') {
+      ctx.effect(() => () => clearInterval(daily), 'balance-pill: holiday refresh timer');
+    } else if (typeof daily.unref === 'function') {
+      daily.unref();
+    }
+  } catch (error) {
+    console.error('[balance-pill] holiday refresh unavailable', error);
   }
 }

@@ -11,11 +11,11 @@ window.__ModuleLoader__.load({
     const PEAK_WINDOWS = [[9 * 60, 12 * 60], [14 * 60, 18 * 60]];
 
     /**
-     * Statutory holidays published by the State Council, as Beijing dates. A
-     * holiday is off-peak all day. Dates for years whose schedule is not
-     * published yet are simply absent; the next New Year is certain.
+     * Built-in official holiday dates, used offline and before a new year's
+     * arrangement is published. The browser refreshes unlisted years from the
+     * same public dataset the Host uses.
      */
-    const HOLIDAYS = new Set([
+    const FALLBACK_HOLIDAYS = [
       '2026-01-01', '2026-01-02', '2026-01-03',
       '2026-02-15', '2026-02-16', '2026-02-17', '2026-02-18', '2026-02-19',
       '2026-02-20', '2026-02-21', '2026-02-22', '2026-02-23',
@@ -26,7 +26,57 @@ window.__ModuleLoader__.load({
       '2026-10-01', '2026-10-02', '2026-10-03', '2026-10-04', '2026-10-05',
       '2026-10-06', '2026-10-07',
       '2027-01-01',
-    ]);
+    ];
+
+    const holidayDays = new Set(FALLBACK_HOLIDAYS);
+    const knownYears = new Set([2026]);
+    const holidayListeners = new Set();
+    const holidayEndpoint = (year) => `https://cdn.jsdelivr.net/gh/NateScarlet/holiday-cn@master/${String(year)}.json`;
+
+    function publishHolidayDays(dates) {
+      let changed = false;
+      for (const date of dates) {
+        if (!holidayDays.has(date)) {
+          holidayDays.add(date);
+          changed = true;
+        }
+      }
+      if (changed) for (const listener of holidayListeners) listener();
+    }
+
+    /** Pull unlisted years from the public dataset; failures keep the fallback. */
+    async function refreshHolidayDays(now) {
+      if (typeof fetch !== 'function') return;
+      const year = bjDate(now).getUTCFullYear();
+      for (const value of [year, year + 1]) {
+        if (knownYears.has(value)) continue;
+        try {
+          const response = await fetch(holidayEndpoint(value));
+          if (!response.ok) continue;
+          const payload = await response.json();
+          const days = Array.isArray(payload?.days) ? payload.days : [];
+          const offDays = days
+            .filter((day) => day !== null && typeof day === 'object' && day.isOffDay === true && typeof day.date === 'string')
+            .map((day) => day.date);
+          if (offDays.length === 0) continue;
+          knownYears.add(value);
+          publishHolidayDays(offDays);
+        } catch {
+          // Offline or blocked: keep whatever is already known.
+        }
+      }
+    }
+
+    /** Re-render the pill whenever a newer holiday list lands. */
+    function useHolidayDays() {
+      const [, bump] = React.useState(0);
+      React.useEffect(() => {
+        const listener = () => bump((value) => value + 1);
+        holidayListeners.add(listener);
+        return () => holidayListeners.delete(listener);
+      }, []);
+      return holidayDays;
+    }
 
     /**
      * List prices in CNY per million tokens, indexed [off-peak, peak]. Cache
@@ -71,12 +121,12 @@ window.__ModuleLoader__.load({
     const bjDate = (ms) => new Date(ms + BEIJING_OFFSET_MS);
     const bjDay = (ms) => bjDate(ms).toISOString().slice(0, 10);
 
-    /** @param ms - epoch milliseconds @returns whether Beijing wall time is peak. */
-    function isPeak(ms) {
+    /** @param ms - epoch milliseconds @param days - off-day set @returns whether Beijing wall time is peak. */
+    function isPeak(ms, days = holidayDays) {
       const d = bjDate(ms);
       const weekday = d.getUTCDay();
       if (weekday === 0 || weekday === 6) return false;
-      if (HOLIDAYS.has(bjDay(ms))) return false;
+      if (days.has(bjDay(ms))) return false;
       const minute = d.getUTCHours() * 60 + d.getUTCMinutes();
       for (const [from, to] of PEAK_WINDOWS) {
         if (minute >= from && minute < to) return true;
@@ -85,11 +135,11 @@ window.__ModuleLoader__.load({
     }
 
     /** The next epoch millisecond at which the peak flag flips, or null within eight days. */
-    function nextSwitch(ms) {
-      const current = isPeak(ms);
+    function nextSwitch(ms, days = holidayDays) {
+      const current = isPeak(ms, days);
       for (let step = 1; step <= 8 * 24 * 60; step += 1) {
         const at = ms + step * 60 * 1000;
-        if (isPeak(at) !== current) return at;
+        if (isPeak(at, days) !== current) return at;
       }
       return null;
     }
@@ -185,6 +235,7 @@ window.__ModuleLoader__.load({
         const useRunning = typeof useSession === 'function' ? useSession : (() => undefined);
         const running = useRunning((snapshot) => (snapshot ? snapshot.running : undefined));
         const project = typeof useProjection === 'function' ? useProjection : (() => undefined);
+        const days = useHolidayDays();
         const usage = project('tokenUsage');
 
         React.useEffect(() => () => {
@@ -235,9 +286,9 @@ window.__ModuleLoader__.load({
           }
         }, [running, load]);
 
-        const peak = isPeak(now);
+        const peak = isPeak(now, days);
         const phase = t(peak ? 'phase.peak' : 'phase.offPeak');
-        const boundary = nextSwitch(now);
+        const boundary = nextSwitch(now, days);
         const until = boundary === null ? '--' : formatBeijingTime(boundary);
         const amount = reading.wallet ? formatAmount(reading.wallet.total, reading.wallet.currency) : undefined;
         const exact = project('sessionCost');
@@ -313,6 +364,7 @@ window.__ModuleLoader__.load({
       __test: { isPeak, nextSwitch, formatAmount, sumWallets, estimateCost, formatCost },
       apply(ctx) {
         ctx.effect(() => ctx.locale.register(NS, DICTIONARIES), 'balance-pill: dictionaries');
+        void refreshHolidayDays(Date.now());
         ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register({
           name: 'conversation.composer.dock',
           id: 'balance-pill',
