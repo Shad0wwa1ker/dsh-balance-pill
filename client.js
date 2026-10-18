@@ -44,26 +44,29 @@ window.__ModuleLoader__.load({
       if (changed) for (const listener of holidayListeners) listener();
     }
 
-    /** Pull unlisted years from the public dataset; failures keep the fallback. */
+    /** Load only the current Beijing year, once; another year is a new fetch. */
+    let holidayPending = false;
     async function refreshHolidayDays(now) {
-      if (typeof fetch !== 'function') return;
+      if (holidayPending || typeof fetch !== 'function') return;
       const year = bjDate(now).getUTCFullYear();
-      for (const value of [year, year + 1]) {
-        if (knownYears.has(value)) continue;
-        try {
-          const response = await fetch(holidayEndpoint(value));
-          if (!response.ok) continue;
-          const payload = await response.json();
-          const days = Array.isArray(payload?.days) ? payload.days : [];
-          const offDays = days
-            .filter((day) => day !== null && typeof day === 'object' && day.isOffDay === true && typeof day.date === 'string')
-            .map((day) => day.date);
-          if (offDays.length === 0) continue;
-          knownYears.add(value);
-          publishHolidayDays(offDays);
-        } catch {
-          // Offline or blocked: keep whatever is already known.
-        }
+      if (knownYears.has(year)) return;
+      holidayPending = true;
+      try {
+        const response = await fetch(holidayEndpoint(year));
+        if (!response.ok) return;
+        const payload = await response.json();
+        if (payload?.year !== year) return;
+        const days = Array.isArray(payload.days) ? payload.days : [];
+        const offDays = days
+          .filter((day) => day !== null && typeof day === 'object' && day.isOffDay === true && typeof day.date === 'string' && day.date.startsWith(`${year}-`))
+          .map((day) => day.date);
+        if (offDays.length === 0) return;
+        knownYears.add(year);
+        publishHolidayDays(offDays);
+      } catch {
+        // Offline or blocked: keep whatever is already known.
+      } finally {
+        holidayPending = false;
       }
     }
 
@@ -76,6 +79,54 @@ window.__ModuleLoader__.load({
         return () => holidayListeners.delete(listener);
       }, []);
       return holidayDays;
+    }
+
+    /* ── balance refresh interval, edited on the plugin's details page ───── */
+
+    const REFRESH_STORAGE_KEY = 'dsh-balance-pill.refreshSeconds';
+    const REFRESH_DEFAULT = 60;
+    const REFRESH_MIN = 10;
+    const REFRESH_MAX = 3600;
+
+    /** Keep the interval inside the supported range; unusable input falls back. */
+    function clampRefresh(value) {
+      const seconds = Math.round(Number(value));
+      if (!Number.isFinite(seconds)) return REFRESH_DEFAULT;
+      return Math.min(REFRESH_MAX, Math.max(REFRESH_MIN, seconds));
+    }
+
+    function readStoredRefresh() {
+      try {
+        const raw = globalThis.localStorage?.getItem(REFRESH_STORAGE_KEY);
+        return raw === null || raw === undefined ? REFRESH_DEFAULT : clampRefresh(raw);
+      } catch {
+        return REFRESH_DEFAULT;
+      }
+    }
+
+    let refreshSeconds = readStoredRefresh();
+    const refreshListeners = new Set();
+
+    function setRefreshSeconds(value) {
+      const next = clampRefresh(value);
+      refreshSeconds = next;
+      try {
+        globalThis.localStorage?.setItem(REFRESH_STORAGE_KEY, String(next));
+      } catch {
+        // Private mode or a blocked store: the value still applies this session.
+      }
+      for (const listener of refreshListeners) listener(next);
+    }
+
+    /** Subscribe a component to interval changes made on the plugin page. */
+    function useRefreshSeconds() {
+      const [seconds, setSeconds] = React.useState(refreshSeconds);
+      React.useEffect(() => {
+        const listener = (value) => setSeconds(value);
+        refreshListeners.add(listener);
+        return () => refreshListeners.delete(listener);
+      }, []);
+      return seconds;
     }
 
     /**
@@ -101,6 +152,13 @@ window.__ModuleLoader__.load({
         'cost.inline': '本次 {amount}',
         'cost.title': '本会话估算：命中 {hit} tok／未命中 {miss} tok／输出 {out} tok，按 deepseek-flash {phase}价。跨峰谷的历史请求按当前时段统一计价。',
         'cost.exact.title': '本会话逐请求计价：命中 {hit} tok／未命中 {miss} tok／输出 {out} tok，每条请求按其发生时的峰谷价计。',
+        'settings.title': '刷新频率',
+        'settings.label': '余额刷新间隔（秒）',
+        'settings.hint': '范围 10–3600 秒，默认 60。每轮对话结束仍会额外刷新一次，这是上限之外的补充。',
+        'settings.save': '保存',
+        'settings.saved': '已保存',
+        'settings.invalid': '请输入 10–3600 之间的整数',
+        'settings.summary': '余额每 {seconds} 秒刷新一次',
       },
       en: {
         'phase.peak': 'Peak',
@@ -115,6 +173,13 @@ window.__ModuleLoader__.load({
         'cost.inline': 'Session {amount}',
         'cost.title': 'Session estimate: {hit} hit / {miss} miss / {out} output tokens at deepseek-flash {phase} rates. Requests spanning both windows are priced uniformly at the current one.',
         'cost.exact.title': 'Session priced per request: {hit} hit / {miss} miss / {out} output tokens, each at the phase in effect when it was sent.',
+        'settings.title': 'Refresh rate',
+        'settings.label': 'Balance refresh interval (seconds)',
+        'settings.hint': '10–3600 seconds, default 60. Each finished turn still triggers one extra refresh on top of it.',
+        'settings.save': 'Save',
+        'settings.saved': 'Saved',
+        'settings.invalid': 'Enter a whole number between 10 and 3600.',
+        'settings.summary': 'Balance refreshes every {seconds} seconds',
       },
     };
 
@@ -236,6 +301,7 @@ window.__ModuleLoader__.load({
         const running = useRunning((snapshot) => (snapshot ? snapshot.running : undefined));
         const project = typeof useProjection === 'function' ? useProjection : (() => undefined);
         const days = useHolidayDays();
+        const refreshEvery = useRefreshSeconds();
         const usage = project('tokenUsage');
 
         React.useEffect(() => () => {
@@ -266,13 +332,18 @@ window.__ModuleLoader__.load({
 
         React.useEffect(() => {
           void load();
-          const balanceTimer = setInterval(() => void load(), 60 * 1000);
+          const balanceTimer = setInterval(() => void load(), refreshEvery * 1000);
           const clockTimer = setInterval(() => setNow(Date.now()), 30 * 1000);
           return () => {
             clearInterval(balanceTimer);
             clearInterval(clockTimer);
           };
-        }, [load]);
+        }, [load, refreshEvery]);
+
+        /** Follow a New Year while the page stays open: load the new year once. */
+        React.useEffect(() => {
+          void refreshHolidayDays(now);
+        }, [now]);
 
         /** Refresh once when a running turn settles, so the charge shows up promptly. */
         React.useEffect(() => {
@@ -358,10 +429,87 @@ window.__ModuleLoader__.load({
       };
     }
 
+    function createSettingsView() {
+      /** Plugins → dsh-balance-pill page: edit the balance refresh interval. */
+      return function BalancePillSettings({ t, view }) {
+        const seconds = useRefreshSeconds();
+        const [draft, setDraft] = React.useState(String(seconds));
+        const [state, setState] = React.useState('idle');
+
+        React.useEffect(() => {
+          setDraft(String(seconds));
+        }, [seconds]);
+
+        if (view === 'summary') return t('settings.summary', { seconds });
+
+        const submit = (event) => {
+          event.preventDefault();
+          const parsed = Number(draft);
+          if (!Number.isFinite(parsed) || parsed < REFRESH_MIN || parsed > REFRESH_MAX) {
+            setState('invalid');
+            return;
+          }
+          setRefreshSeconds(parsed);
+          setState('saved');
+        };
+
+        return h('form', {
+          onSubmit: submit,
+          style: { display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 420, padding: '4px 0' },
+        }, [
+          h('label', { key: 'label', style: { display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13 } }, [
+            h('span', { key: 'text' }, t('settings.label')),
+            h('input', {
+              key: 'input',
+              type: 'number',
+              min: REFRESH_MIN,
+              max: REFRESH_MAX,
+              step: 5,
+              value: draft,
+              onChange: (event) => {
+                setDraft(event.target.value);
+                setState('idle');
+              },
+              style: {
+                width: 140,
+                height: 30,
+                padding: '0 8px',
+                borderRadius: 6,
+                border: '1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.4))',
+                background: 'var(--dsw-alias-bg-l1, transparent)',
+                color: 'inherit',
+                font: 'inherit',
+              },
+            }),
+          ]),
+          h('div', { key: 'actions', style: { display: 'flex', alignItems: 'center', gap: 10 } }, [
+            h('button', {
+              key: 'save',
+              type: 'submit',
+              style: {
+                height: 28,
+                padding: '0 14px',
+                borderRadius: 6,
+                border: 0,
+                cursor: 'pointer',
+                background: 'var(--dsw-alias-state-business-primary, #4176e6)',
+                color: '#fff',
+                font: 'inherit',
+                fontSize: 13,
+              },
+            }, t('settings.save')),
+            state === 'saved' ? h('span', { key: 'saved', style: { fontSize: 12, opacity: 0.7 } }, t('settings.saved')) : null,
+            state === 'invalid' ? h('span', { key: 'invalid', style: { fontSize: 12, color: 'var(--dsw-alias-label-error, #d14343)' } }, t('settings.invalid')) : null,
+          ]),
+          h('p', { key: 'hint', style: { margin: 0, fontSize: 12, opacity: 0.6 } }, t('settings.hint')),
+        ]);
+      };
+    }
+
     return {
       inject: ['slots', 'locale', 'remote', 'remote.account'],
       /** Pure helpers, exported for verification outside the browser. */
-      __test: { isPeak, nextSwitch, formatAmount, sumWallets, estimateCost, formatCost },
+      __test: { isPeak, nextSwitch, formatAmount, sumWallets, estimateCost, formatCost, clampRefresh, refreshHolidayDays },
       apply(ctx) {
         ctx.effect(() => ctx.locale.register(NS, DICTIONARIES), 'balance-pill: dictionaries');
         void refreshHolidayDays(Date.now());
@@ -371,6 +519,11 @@ window.__ModuleLoader__.load({
           order: 2,
           locale: NS,
         }, createPill(ctx)));
+        ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({
+          name: 'plugins.bundle.config',
+          key: '@local/dsh-balance-pill',
+          locale: NS,
+        }, createSettingsView()));
       },
     };
   },

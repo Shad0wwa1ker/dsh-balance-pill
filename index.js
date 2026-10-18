@@ -51,39 +51,38 @@ export function beijingYear(ms) {
 }
 
 /**
- * Merge the published off-days of the current and next Beijing year.
+ * Load the current Beijing year's off-days once.
  *
- * A year with no announcement yet returns an empty `days` array; it is retried
- * on the next refresh instead of being recorded as known. Failures leave the
- * built-in list in place.
+ * One fetch per year is enough: the schedule does not change after publication,
+ * and a later year only needs loading once it becomes current. A year whose
+ * announcement is not out yet returns an empty `days` array and is retried on
+ * the next call; a payload naming another year is ignored.
  *
  * @param now - reference time in epoch milliseconds.
  * @param fetchImpl - fetch implementation, injectable for tests.
- * @returns whether any year was learned.
+ * @returns whether the current year was learned.
  */
 export async function refreshHolidays(now = Date.now(), fetchImpl = globalThis.fetch) {
-  if (typeof fetchImpl !== 'function') return false;
   const year = beijingYear(now);
-  const years = [year, year + 1].filter((value) => !fetchedYears.has(value));
-  let learned = false;
-  for (const value of years) {
-    try {
-      const response = await fetchImpl(holidayEndpoint(value), { signal: AbortSignal.timeout(8000) });
-      if (!response.ok) continue;
-      const payload = await response.json();
-      const days = Array.isArray(payload?.days) ? payload.days : [];
-      const offDays = days
-        .filter((day) => day !== null && typeof day === 'object' && day.isOffDay === true && typeof day.date === 'string')
-        .map((day) => day.date);
-      if (offDays.length === 0) continue;
-      for (const date of offDays) holidayDays.add(date);
-      fetchedYears.add(value);
-      learned = true;
-    } catch {
-      // Offline or blocked: the built-in list stays authoritative.
-    }
+  if (fetchedYears.has(year)) return false;
+  if (typeof fetchImpl !== 'function') return false;
+  try {
+    const response = await fetchImpl(holidayEndpoint(year), { signal: AbortSignal.timeout(8000) });
+    if (!response.ok) return false;
+    const payload = await response.json();
+    if (payload?.year !== year) return false;
+    const days = Array.isArray(payload.days) ? payload.days : [];
+    const offDays = days
+      .filter((day) => day !== null && typeof day === 'object' && day.isOffDay === true && typeof day.date === 'string' && day.date.startsWith(`${year}-`))
+      .map((day) => day.date);
+    if (offDays.length === 0) return false;
+    for (const date of offDays) holidayDays.add(date);
+    fetchedYears.add(year);
+    return true;
+  } catch {
+    // Offline or blocked: the built-in list stays authoritative.
+    return false;
   }
-  return learned;
 }
 
 /** @param ms - epoch milliseconds @param days - off-day set @returns whether Beijing wall time is peak. */
