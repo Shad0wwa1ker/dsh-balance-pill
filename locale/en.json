@@ -1,6 +1,6 @@
 {
   "meta": {
-    "title": "Balance & Peak Hours",
-    "description": "Shows the account balance, this session's spend, and whether DeepSeek pricing is in peak or off-peak hours right now."
+    "title": "Per-request cost",
+    "description": "Shows the account balance, the live peak/off-peak phase, and this session's spend priced request by request, subagent sessions and Search/Fetch included."
   }
 }

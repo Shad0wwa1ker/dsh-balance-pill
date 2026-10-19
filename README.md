@@ -2,8 +2,6 @@
 
 中文 | [English](README.en.md)
 
-> 包名仍为 `@local/dsh-balance-pill`；仓库已改名为 `dsh-per-request-cost`，安装方式不变。
-
 一个 [DeepSeek Harness](https://github.com/deepseek-ai) 的 Web 界面插件，在输入框下方显示一枚紧凑的胶囊：
 
 ```
@@ -92,7 +90,7 @@ Host 半边把持久会话日志折叠成一个对客户端可见的投影 `sess
 
 ## 设置
 
-打开 **插件 → dsh-balance-pill**，在 **Refresh rate（刷新频率）** 中修改余额刷新间隔（10–3600 秒，默认 60），点击保存后立即生效，胶囊会马上按新间隔刷新。该值保存在当前浏览器本地，不写入 `cordis.patch.yml`，也不需要重启。
+打开 **插件 → dsh-per-request-cost**，在 **Refresh rate（刷新频率）** 中修改余额刷新间隔（10–3600 秒，默认 60），点击保存后立即生效，胶囊会马上按新间隔刷新。该值保存在当前浏览器本地，不写入 `cordis.patch.yml`，也不需要重启。
 
 每轮对话结束时仍会额外刷新一次余额，这是间隔之外的补充，不受该设置影响。
 
@@ -106,13 +104,15 @@ Host 半边把持久会话日志折叠成一个对客户端可见的投影 `sess
 
 ```bash
 cd "$DSH_PROFILE_DIR"          # 例如 ~/.dsh/profiles/desktop
-pnpm add link:/absolute/path/to/dsh-balance-pill
+pnpm add link:/absolute/path/to/dsh-per-request-cost
 ```
+
+**方式三 — 直接从 GitHub 安装**（推荐）：`pnpm add github:Shad0wwa1ker/dsh-per-request-cost`，然后把 `dsh-per-request-cost` 加进 profile 的 `dsh.profile.bundles`。
 
 然后把 bundle 加入该 profile 的 `package.json`：
 
 ```json
-"dsh": { "profile": { "bundles": ["@local/dsh-balance-pill"] } }
+"dsh": { "profile": { "bundles": ["dsh-per-request-cost"] } }
 ```
 
 刷新页面（或重启 Harness）一次，让浏览器加载新的客户端模块。Host 投影属于 Host 代码，需要**下次启动 Harness** 才生效；页面只需刷新。
@@ -135,7 +135,7 @@ pnpm add link:/absolute/path/to/dsh-balance-pill
 
 - `index.js` — Host 半边：向 `ctx.sessionProjections` 注册 `sessionCost` 投影，折叠逻辑、价目表、节假日列表都在这里；注册是可选的，没有投影注册表的 profile 也能正常加载。
 - `client.js` — 通过 `window.__ModuleLoader__` 注册的浏览器模块：注册输入框胶囊和 bundle 配置页，并通过 `useSession` / `useProjection` 标准 props 读取会话状态与两个投影。
-- `cordis.patch.yml` — 插入 `balance-pill` 插件行。
+- `cordis.patch.yml` — 插入 `per-request-cost` 插件行。
 - `locale/*.json` — 插件管理页展示用的标题与描述（中/英）。
 
 ## 隐私

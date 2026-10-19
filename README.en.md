@@ -2,8 +2,6 @@
 
 English | [中文](README.md)
 
-> The package is still named `@local/dsh-balance-pill`; only the repository was renamed to `dsh-per-request-cost`. Installation is unchanged.
-
 A [DeepSeek Harness](https://github.com/deepseek-ai) Web-UI plugin that renders one compact pill under the composer:
 
 ```
@@ -90,7 +88,7 @@ Only the direct children of the open session are added. Grandchildren, or agents
 
 ## Settings
 
-Open **Plugins → dsh-balance-pill** and use **Refresh rate** to change the balance interval (10–3600 seconds, default 60). The value is stored per browser and saved with the page's own Save button; the pill picks it up immediately. A finished turn still triggers one extra refresh on top of the interval.
+Open **Plugins → dsh-per-request-cost** and use **Refresh rate** to change the balance interval (10–3600 seconds, default 60). The value is stored per browser and saved with the page's own Save button; the pill picks it up immediately. A finished turn still triggers one extra refresh on top of the interval.
 
 The setting is a browser preference, not profile configuration: it does not touch `cordis.patch.yml` and needs no restart.
 
@@ -104,13 +102,15 @@ Requires DeepSeek Harness 0.2.x with a signed-in DeepSeek account (the balance c
 
 ```bash
 cd "$DSH_PROFILE_DIR"          # e.g. ~/.dsh/profiles/desktop
-pnpm add link:/absolute/path/to/dsh-balance-pill
+pnpm add link:/absolute/path/to/dsh-per-request-cost
 ```
+
+**Option C — straight from GitHub** (recommended): `pnpm add github:Shad0wwa1ker/dsh-per-request-cost`, then add `dsh-per-request-cost` to the profile's `dsh.profile.bundles`.
 
 Then add the bundle to that profile's `package.json`:
 
 ```json
-"dsh": { "profile": { "bundles": ["@local/dsh-balance-pill"] } }
+"dsh": { "profile": { "bundles": ["dsh-per-request-cost"] } }
 ```
 
 Reload the page (or restart Harness) once so the browser loads the new client module. The Host projection is Host code: it takes effect on the next Harness start, while the page only needs a reload.
@@ -133,7 +133,7 @@ The refresh interval is edited in the plugin's details page (see **Settings**). 
 
 - `index.js` — Host half. Registers the `sessionCost` projection with `ctx.sessionProjections`; the fold, price tables, and holiday list live here. Registration is optional, so profiles without the projection registry still load the plugin.
 - `client.js` — browser module registered through `window.__ModuleLoader__`. It injects `slots`, `locale`, `remote`, `remote.account`, registers the composer pill and the bundle's configuration page, and reads `useSession` / `useProjection` standard props for turn state and both projections.
-- `cordis.patch.yml` — inserts the `balance-pill` row.
+- `cordis.patch.yml` — inserts the `per-request-cost` row.
 - `locale/*.json` — plugin-manager display metadata (zh / en).
 
 ## Privacy

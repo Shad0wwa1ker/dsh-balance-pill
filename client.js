@@ -1,10 +1,10 @@
 window.__ModuleLoader__.load({
-  id: '@local/dsh-balance-pill',
+  id: 'dsh-per-request-cost',
   factory(require) {
     const React = require('react');
     const h = React.createElement;
 
-    const NS = 'balance-pill';
+    const NS = 'per-request-cost';
 
     /** DeepSeek bills Beijing time: peak = Mon–Fri 09:00–12:00 and 14:00–18:00. */
     const BEIJING_OFFSET_MS = 8 * 60 * 60 * 1000;
@@ -136,7 +136,7 @@ window.__ModuleLoader__.load({
 
     /* ── balance refresh interval, edited on the plugin's details page ───── */
 
-    const REFRESH_STORAGE_KEY = 'dsh-balance-pill.refreshSeconds';
+    const REFRESH_STORAGE_KEY = 'dsh-per-request-cost.refreshSeconds';
     const REFRESH_DEFAULT = 60;
     const REFRESH_MIN = 10;
     const REFRESH_MAX = 3600;
@@ -543,7 +543,7 @@ window.__ModuleLoader__.load({
 
         return h('button', {
           type: 'button',
-          'data-balance-pill': true,
+          'data-per-request-cost': true,
           title,
           'aria-label': label,
           'aria-busy': busy,
@@ -570,7 +570,7 @@ window.__ModuleLoader__.load({
     }
 
     function createSettingsView() {
-      /** Plugins → dsh-balance-pill page: edit the balance refresh interval. */
+      /** Plugins → dsh-per-request-cost page: edit the balance refresh interval. */
       return function BalancePillSettings({ t, view }) {
         const seconds = useRefreshSeconds();
         const [draft, setDraft] = React.useState(String(seconds));
@@ -651,17 +651,17 @@ window.__ModuleLoader__.load({
       /** Pure helpers, exported for verification outside the browser. */
       __test: { isPeak, nextSwitch, formatAmount, sumWallets, estimateCost, formatCost, clampRefresh, refreshHolidayDays, totalCostOf, childCostSummary },
       apply(ctx) {
-        ctx.effect(() => ctx.locale.register(NS, DICTIONARIES), 'balance-pill: dictionaries');
+        ctx.effect(() => ctx.locale.register(NS, DICTIONARIES), 'per-request-cost: dictionaries');
         void refreshHolidayDays(Date.now());
         ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register({
           name: 'conversation.composer.dock',
-          id: 'balance-pill',
+          id: 'per-request-cost',
           order: 2,
           locale: NS,
         }, createPill(ctx)));
         ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({
           name: 'plugins.bundle.config',
-          key: '@local/dsh-balance-pill',
+          key: 'dsh-per-request-cost',
           locale: NS,
         }, createSettingsView()));
       },

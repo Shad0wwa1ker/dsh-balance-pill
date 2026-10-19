@@ -1,5 +1,5 @@
 /**
- * Host half of the balance-pill bundle.
+ * Host half of the per-request-cost bundle.
  *
  * The pill's cost figure must survive peak/off-peak switches and compaction, so
  * the exact price is folded here from the durable log instead of estimated in
@@ -432,22 +432,22 @@ export function apply(ctx) {
       try {
         scope.sessionProjections.register(sessionCostProjection);
       } catch (error) {
-        console.error('[balance-pill] sessionCost projection registration failed', error);
+        console.error('[per-request-cost] sessionCost projection registration failed', error);
       }
     });
   } catch (error) {
-    console.error('[balance-pill] sessionProjections injection unavailable', error);
+    console.error('[per-request-cost] sessionProjections injection unavailable', error);
   }
 
   try {
     void refreshHolidays();
     const daily = setInterval(() => void refreshHolidays(), 24 * 60 * 60 * 1000);
     if (typeof ctx.effect === 'function') {
-      ctx.effect(() => () => clearInterval(daily), 'balance-pill: holiday refresh timer');
+      ctx.effect(() => () => clearInterval(daily), 'per-request-cost: holiday refresh timer');
     } else if (typeof daily.unref === 'function') {
       daily.unref();
     }
   } catch (error) {
-    console.error('[balance-pill] holiday refresh unavailable', error);
+    console.error('[per-request-cost] holiday refresh unavailable', error);
   }
 }
