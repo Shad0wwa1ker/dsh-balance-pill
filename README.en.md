@@ -12,6 +12,8 @@ A [DeepSeek Harness](https://github.com/deepseek-ai) Web-UI plugin that renders 
 
 It shows the account balance, whether model pricing is currently at peak or off-peak rates, and what the current session has cost so far. **The session figure is real per-request pricing**: every model call is priced at the rate in effect when that call was sent, so a session that crosses 12:00, 18:00, a weekend, or a holiday still totals correctly.
 
+![The pill under the composer; the balance is masked in this screenshot](assets/composer-pill.png)
+
 ## Features
 
 | Reading | Source | Refresh |
