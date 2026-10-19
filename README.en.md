@@ -67,6 +67,16 @@ Weekends are computed, so they work for every year. Statutory holidays are annou
 
 The dataset only supplies dates and holiday names; no request carries account data.
 
+## Multi-agent sessions
+
+When a session delegates work to subagents, their model calls run in **child sessions** with their own logs and their own `sessionCost` projection. The parent pill adds the direct children's costs on top of its own:
+
+- the parent's `subagentCatalog` projection names each child;
+- the browser asks the session controller for each child's projections (`sessions.refreshProjections`) and sums their `sessionCost` totals;
+- the hover text reports `Includes N subagent sessions: ¥x`; a child whose projections have not arrived yet is listed separately as pending instead of being silently counted as zero.
+
+Only the direct children of the open session are added. Grandchildren, or agents running in another workspace, are not included.
+
 ## Settings
 
 Open **Plugins → dsh-balance-pill** and use **Refresh rate** to change the balance interval (10–3600 seconds, default 60). The value is stored per browser and saved with the page's own Save button; the pill picks it up immediately. A finished turn still triggers one extra refresh on top of the interval.
@@ -105,6 +115,7 @@ The refresh interval is edited in the plugin's details page (see **Settings**). 
 - **Model tier comes from the request header.** `deepseek-v4-pro` uses the Pro list; anything else is treated as flash. Custom models that bill differently will be mispriced.
 - **Balance is a snapshot.** It reflects Platform at the last refresh, so it can lag the messages you just sent by up to the configured interval.
 - **Search/Fetch billing starts on 2026-11-01 00:00 Beijing time.** Before that instant the counts are shown but priced at zero. The count is per successful request: distinct queries for Search, 2xx pages for Fetch; an error or an empty search result is not billed. A multi-query call where only some queries returned results is counted as its query count, so it can slightly overstate.
+- **Subagent costs are added only for direct children whose projections have loaded.** A still-loading child appears as pending in the tooltip; nested children are outside the sum.
 - **Non-DeepSeek routes** (for example Anthropic-compatible providers) are priced with DeepSeek rates; the pill is meant for a DeepSeek account.
 
 ## How it works

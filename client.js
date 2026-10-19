@@ -201,6 +201,33 @@ window.__ModuleLoader__.load({
       return exact.cost + (Number.isFinite(exact.serviceCost) ? exact.serviceCost : 0);
     }
 
+    /**
+     * Sum the `sessionCost` projections of a session's direct subagent children.
+     * A child whose projection has not loaded yet is reported as pending rather
+     * than counted as zero.
+     *
+     * @param catalog - the parent's `subagentCatalog` value.
+     * @param snapshots - the client's `projectionsBySession` map.
+     */
+    function childCostSummary(catalog, snapshots) {
+      let amount = 0;
+      let counted = 0;
+      let pending = 0;
+      if (!Array.isArray(catalog)) return { amount, counted, pending };
+      for (const entry of catalog) {
+        if (entry === null || typeof entry !== 'object' || typeof entry.id !== 'string') continue;
+        const value = snapshots?.[entry.id]?.values?.sessionCost;
+        const total = totalCostOf(value);
+        if (total === undefined) {
+          pending += 1;
+        } else {
+          amount += total;
+          counted += 1;
+        }
+      }
+      return { amount, counted, pending };
+    }
+
     const DICTIONARIES = {
       zh: {
         'phase.peak': '峰时',
@@ -217,6 +244,8 @@ window.__ModuleLoader__.load({
         'cost.exact.title': '本会话逐请求计价：命中 {hit} tok／未命中 {miss} tok／输出 {out} tok，每条请求按其发生时的峰谷价计。',
         'cost.services': 'Search {search} 次 · Fetch {fetch} 次，另计 ¥{amount}',
         'cost.services.free': 'Search {search} 次 · Fetch {fetch} 次，11 月 1 日前免费',
+        'cost.children': '含 {count} 个子会话 ¥{amount}',
+        'cost.children.pending': '另有 {count} 个子会话尚未加载',
         'settings.title': '刷新频率',
         'settings.label': '余额刷新间隔（秒）',
         'settings.hint': '范围 10–3600 秒，默认 60。每轮对话结束仍会额外刷新一次，这是上限之外的补充。',
@@ -240,6 +269,8 @@ window.__ModuleLoader__.load({
         'cost.exact.title': 'Session priced per request: {hit} hit / {miss} miss / {out} output tokens, each at the phase in effect when it was sent.',
         'cost.services': 'Search {search} · Fetch {fetch} requests, ¥{amount} extra',
         'cost.services.free': 'Search {search} · Fetch {fetch} requests, free until Nov 1',
+        'cost.children': 'Includes {count} subagent sessions: ¥{amount}',
+        'cost.children.pending': '{count} more subagent sessions not loaded yet',
         'settings.title': 'Refresh rate',
         'settings.label': 'Balance refresh interval (seconds)',
         'settings.hint': '10–3600 seconds, default 60. Each finished turn still triggers one extra refresh on top of it.',
@@ -357,7 +388,7 @@ window.__ModuleLoader__.load({
 
     function createPill(ctx) {
       /** Composer pill: account balance and the current billing phase. */
-      return function BalancePill({ useSession, useProjection }) {
+      return function BalancePill({ useSession, useProjection, useSessions }) {
         const t = ctx.locale.bind(NS);
         const [reading, setReading] = React.useState({ status: 'loading', wallet: undefined });
         const [now, setNow] = React.useState(() => Date.now());
@@ -367,9 +398,25 @@ window.__ModuleLoader__.load({
         const useRunning = typeof useSession === 'function' ? useSession : (() => undefined);
         const running = useRunning((snapshot) => (snapshot ? snapshot.running : undefined));
         const project = typeof useProjection === 'function' ? useProjection : (() => undefined);
+        const useSessionsSafe = typeof useSessions === 'function' ? useSessions : (() => undefined);
+        const childSnapshots = useSessionsSafe((state) => (state ? state.projectionsBySession : undefined));
+        const catalog = project('subagentCatalog');
+        const childRefresh = React.useRef(new Set());
         const days = useHolidayDays();
         const refreshEvery = useRefreshSeconds();
         const usage = project('tokenUsage');
+
+        React.useEffect(() => {
+          const service = ctx.sessions;
+          if (!service || typeof service.refreshProjections !== 'function' || !Array.isArray(catalog)) return;
+          for (const entry of catalog) {
+            if (entry === null || typeof entry !== 'object' || typeof entry.id !== 'string') continue;
+            if (childSnapshots?.[entry.id]?.values?.sessionCost !== undefined) continue;
+            if (childRefresh.current.has(entry.id)) continue;
+            childRefresh.current.add(entry.id);
+            Promise.resolve(service.refreshProjections(entry.id)).catch(() => {});
+          }
+        }, [catalog, childSnapshots]);
 
         React.useEffect(() => () => {
           alive.current = false;
@@ -431,8 +478,10 @@ window.__ModuleLoader__.load({
         const amount = reading.wallet ? formatAmount(reading.wallet.total, reading.wallet.currency) : undefined;
         const exact = project('sessionCost');
         const exactTotal = totalCostOf(exact);
-        const cost = exactTotal !== undefined
-          ? exactTotal
+        const children = childCostSummary(catalog, childSnapshots);
+        const combined = exactTotal === undefined ? undefined : exactTotal + children.amount;
+        const cost = combined !== undefined
+          ? combined
           : usage ? estimateCost(usage, peak) : undefined;
         const costText = cost === undefined ? null : t('cost.inline', { amount: formatCost(cost) });
         const label = [
@@ -467,6 +516,12 @@ window.__ModuleLoader__.load({
             fetch: formatTokens(exact.fetchRequests || 0),
             amount: formatCost(exact.serviceCost || 0),
           });
+        const childDetail = children.counted === 0
+          ? null
+          : t('cost.children', { count: children.counted, amount: formatCost(children.amount) });
+        const childPending = children.pending === 0
+          ? null
+          : t('cost.children.pending', { count: children.pending });
         const title = [
           reading.status === 'unavailable'
             ? t('title.unknown')
@@ -474,6 +529,8 @@ window.__ModuleLoader__.load({
           detail,
           costDetail,
           serviceDetail,
+          childDetail,
+          childPending,
           t('title.refresh'),
         ].filter(Boolean).join(' · ');
 
@@ -583,9 +640,9 @@ window.__ModuleLoader__.load({
     }
 
     return {
-      inject: ['slots', 'locale', 'remote', 'remote.account'],
+      inject: ['slots', 'locale', 'remote', 'remote.account', 'sessions'],
       /** Pure helpers, exported for verification outside the browser. */
-      __test: { isPeak, nextSwitch, formatAmount, sumWallets, estimateCost, formatCost, clampRefresh, refreshHolidayDays, totalCostOf },
+      __test: { isPeak, nextSwitch, formatAmount, sumWallets, estimateCost, formatCost, clampRefresh, refreshHolidayDays, totalCostOf, childCostSummary },
       apply(ctx) {
         ctx.effect(() => ctx.locale.register(NS, DICTIONARIES), 'balance-pill: dictionaries');
         void refreshHolidayDays(Date.now());
