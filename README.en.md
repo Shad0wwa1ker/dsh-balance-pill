@@ -31,7 +31,14 @@ It shows the account balance, whether model pricing is currently at peak or off-
 
 ### Search and Fetch charges
 
-`web_search` and `web_fetch` call separate APIs billed **per successful request**: ¥5 per 1,000 requests for each API. The session figure counts them separately from tokens:
+Only **DeepSeek's own search API** is billed per request (¥5 per 1,000). Plugins such as `dsh-free-search` route searches to third-party engines — Tavily, Bing, Exa, DuckDuckGo — which are free or use their own quotas and must not appear on a DeepSeek bill. The plugin reads the engine name from the tool result header:
+
+- `Search (deepseek-tools):` / `Search (deepseek-official):` — DeepSeek search, counted;
+- `Search (tavily):`, `Search (bing):`, `Search (exa):` and other third-party engines — shown as "third-party engine searches" and never billed;
+- a `web_search` result without an engine header comes from the core DSH tool, whose provider is DeepSeek's search API, so it counts;
+- `advanced_search` counts as one request; `multi_search` fans out across engines and cannot be attributed, so it is not billed (under-count rather than over-count).
+
+Everything else:
 
 - one `web_search` call bills once per distinct query (duplicates collapse, matching the tool's own fan-out rule);
 - one `web_fetch` call bills once when the page came back with a 2xx status;
@@ -114,7 +121,7 @@ The refresh interval is edited in the plugin's details page (see **Settings**). 
 - **Holiday coverage follows the published schedule.** A date is only known to be a holiday after the State Council announcement exists in the dataset; until then a holiday weekday is priced as peak. Edit `FALLBACK_HOLIDAYS` or point the endpoints elsewhere if you need a different calendar.
 - **Model tier comes from the request header.** `deepseek-v4-pro` uses the Pro list; anything else is treated as flash. Custom models that bill differently will be mispriced.
 - **Balance is a snapshot.** It reflects Platform at the last refresh, so it can lag the messages you just sent by up to the configured interval.
-- **Search/Fetch billing starts on 2026-11-01 00:00 Beijing time.** Before that instant the counts are shown but priced at zero. The count is per successful request: distinct queries for Search, 2xx pages for Fetch; an error or an empty search result is not billed. A multi-query call where only some queries returned results is counted as its query count, so it can slightly overstate.
+- **Search/Fetch billing starts on 2026-11-01 00:00 Beijing time.** Only requests answered by a DeepSeek search engine are counted; third-party engines (Tavily/Bing/Exa) are free and shown separately in the tooltip. The count is per successful request: distinct queries for Search, 2xx pages for Fetch; an error or an empty search result is not billed. A multi-query call where only some queries returned results is counted as its query count, so it can slightly overstate; `multi_search` mixes engines and is not billed.
 - **Subagent costs are added only for direct children whose projections have loaded.** A still-loading child appears as pending in the tooltip; nested children are outside the sum.
 - **Non-DeepSeek routes** (for example Anthropic-compatible providers) are priced with DeepSeek rates; the pill is meant for a DeepSeek account.
 

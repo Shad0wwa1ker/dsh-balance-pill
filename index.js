@@ -44,6 +44,19 @@ const PRICING = {
 const SERVICE_PRICE = 5 / 1000;
 const SERVICE_BILLING_START = Date.parse('2026-10-31T16:00:00Z');
 
+/**
+ * Engines that resolve to DeepSeek's own search API, the only one the platform
+ * bills (¥5 per 1,000 requests). Everything else — Tavily, Bing, Exa, DuckDuckGo
+ * and the rest of the free-search plugin's third-party engines — is free, so a
+ * search that lands on one of those must not add the per-request fee.
+ */
+const DEEPSEEK_SEARCH_ENGINES = new Set([
+  'deepseek-tools',
+  'deepseek-official',
+  'deepseek-search-api',
+  'deepseek',
+]);
+
 /** Parse a tool call's JSON argument string, or undefined when malformed. */
 function parseArguments(raw) {
   if (typeof raw !== 'string') return undefined;
@@ -75,15 +88,32 @@ function resultText(data) {
 }
 
 /**
+ * The engine that answered a search, read from the free-search result header
+ * (`Search (tavily, timeRange=day):`, `Multi-Search (multi):`). Returns null for
+ * results without a header, which are the core DSH tool's DeepSeek results.
+ */
+function searchEngineName(text) {
+  const match = /^(?:Multi-)?Search \(([^)]*)\)/m.exec(text);
+  if (match === null) return null;
+  const name = match[1].split(',')[0].trim().toLowerCase();
+  return name === '' ? null : name;
+}
+
+/**
  * Whether one web tool result corresponds to a billable API request.
  *
- * Search charges only for non-empty result lists; Fetch charges only when the
- * API returned page content with HTTP 200. Results are conservative: anything
- * that looks like a failure is not billed.
+ * Search charges only when DeepSeek's own search engine answered; third-party
+ * engines of the free-search plugin are free, so their results never add the
+ * per-request fee. Search charges only for non-empty result lists; Fetch charges
+ * only when the API returned page content with HTTP 200. Anything that looks
+ * like a failure is not billed.
  */
 function billableRequests(kind, data, text) {
   if (data?.message?.isError === true) return 0;
   if (kind === 'search') {
+    const engine = searchEngineName(text);
+    if (engine !== null && !DEEPSEEK_SEARCH_ENGINES.has(engine)) return 0;
+    if (engine === null && !text.startsWith('External web content follows')) return 0;
     const hasSources = text.includes('Sources:');
     return !hasSources && text.includes('No results found.') ? 0 : 1;
   }
@@ -248,6 +278,7 @@ export function init() {
     stepStart: null,
     last: null,
     searchRequests: 0,
+    searchFree: 0,
     fetchRequests: 0,
     serviceCost: 0,
     pending: {},
@@ -311,17 +342,17 @@ export function fold(state, event) {
     }
     case 'tool/call': {
       const name = event.data?.name;
-      if (name !== 'web_search' && name !== 'web_fetch') return state;
+      if (name !== 'web_search' && name !== 'advanced_search' && name !== 'web_fetch') return state;
       const callId = event.data?.callId;
       if (typeof callId !== 'string') return state;
       const args = parseArguments(event.data?.arguments);
-      const count = name === 'web_search' ? searchQueryCount(args) : 1;
+      const count = name === 'web_fetch' ? 1 : name === 'web_search' ? searchQueryCount(args) : 1;
       if (count === 0) return state;
       return {
         ...state,
         pending: {
           ...state.pending,
-          [callId]: { kind: name === 'web_search' ? 'search' : 'fetch', count, at: event.time },
+          [callId]: { kind: name === 'web_fetch' ? 'fetch' : 'search', count, at: event.time },
         },
       };
     }
@@ -331,8 +362,12 @@ export function fold(state, event) {
       if (entry === undefined) return state;
       const pending = { ...state.pending };
       delete pending[callId];
-      const billable = billableRequests(entry.kind, event.data, resultText(event.data)) === 1 ? entry.count : 0;
-      if (billable === 0) return { ...state, pending };
+      const text = resultText(event.data);
+      const engine = entry.kind === 'search' ? searchEngineName(text) : null;
+      const free = engine !== null && !DEEPSEEK_SEARCH_ENGINES.has(engine)
+        && event.data?.message?.isError !== true;
+      const billable = free ? 0 : billableRequests(entry.kind, event.data, text) === 1 ? entry.count : 0;
+      if (billable === 0 && !free) return { ...state, pending };
       const charged = typeof entry.at === 'number' && entry.at >= SERVICE_BILLING_START
         ? billable * SERVICE_PRICE
         : 0;
@@ -340,6 +375,7 @@ export function fold(state, event) {
         ...state,
         pending,
         searchRequests: state.searchRequests + (entry.kind === 'search' ? billable : 0),
+        searchFree: state.searchFree + (free && entry.kind === 'search' ? entry.count : 0),
         fetchRequests: state.fetchRequests + (entry.kind === 'fetch' ? billable : 0),
         serviceCost: round(state.serviceCost + charged),
       };
@@ -361,7 +397,7 @@ const views = new WeakMap();
 
 export const sessionCostProjection = {
   key: 'sessionCost',
-  stateVersion: 2,
+  stateVersion: 3,
   stateSchema: passthrough,
   init,
   apply: fold,
@@ -378,6 +414,7 @@ export const sessionCostProjection = {
           cacheWriteTokens: state.cacheWriteTokens,
           model: state.model,
           searchRequests: state.searchRequests,
+          searchFree: state.searchFree,
           fetchRequests: state.fetchRequests,
           serviceCost: state.serviceCost,
           exact: true,

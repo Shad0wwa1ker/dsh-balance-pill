@@ -33,7 +33,14 @@
 
 ### Search / Fetch 费用
 
-`web_search` 与 `web_fetch` 走的是两个独立 API，**按成功请求次数计费**：各 ¥5 / 1,000 次。插件把它们与 token 费用分开统计：
+只有 **DeepSeek 自己的搜索接口**按次数计费（¥5 / 1,000 次）。`dsh-free-search` 这类插件会把搜索路由到 Tavily、Bing、Exa、DuckDuckGo 等第三方引擎，这些引擎免费或走各自的额度，**不应计入 DeepSeek 账单**。插件从工具结果头部的引擎名判断：
+
+- `Search (deepseek-tools):`、`Search (deepseek-official):` → DeepSeek 搜索，计入 Search；
+- `Search (tavily):`、`Search (bing):`、`Search (exa):` 等第三方引擎 → 显示为“第三方引擎搜索”，金额始终为 0；
+- 没有引擎头部的 `web_search`（DSH 核心工具）按 DeepSeek Search API 计；
+- `advanced_search` 按 1 次请求计；`multi_search` 混合多个引擎、无法拆分，因此不计费（宁少勿多）。
+
+其余口径：
 
 - 一次 `web_search` 按去重后的 query 数计费（与工具自身的并发 fan-out 规则一致）；
 - 一次 `web_fetch` 在页面返回 2xx 时计 1 次；
@@ -116,7 +123,7 @@ pnpm add link:/absolute/path/to/dsh-balance-pill
 - **节假日以已公布安排为准。** 国务院公告未发布前，工作日的节假日会按高峰计价；需要别的日历可改 `FALLBACK_HOLIDAYS` 或替换数据源地址。
 - **模型档位来自 request header。** `deepseek-v4-pro` 使用 Pro 价目表，其余按 flash 计；自定义模型若计费不同会算偏。
 - **余额是快照。** 反映的是最近一次刷新的平台余额，最多滞后一个刷新间隔。
-- **Search / Fetch 自 2026-11-01 00:00（北京时间）起计费。** 之前只显示次数、金额按 0 计。次数按成功请求统计：Search 看去重后的 query 数，Fetch 看 2xx 页面；报错或空结果不计费。多 query 调用中只有部分 query 有结果时，会按 query 总数计，可能略微多算。
+- **Search / Fetch 自 2026-11-01 00:00（北京时间）起计费。** 只统计 DeepSeek 搜索引擎命中的请求；第三方引擎（Tavily/Bing/Exa 等）不计费，悬停提示里单独显示次数。之前只显示次数、金额按 0 计。次数按成功请求统计：Search 看去重后的 query 数，Fetch 看 2xx 页面；报错或空结果不计费。多 query 调用中只有部分 query 有结果时，会按 query 总数计，可能略微多算；`multi_search` 混合多引擎无法拆分，不计费。
 - **子智能体费用只汇总直接子会话，且要等投影加载完成。** 仍在加载的子会话会在提示里标为“未加载”；更深层的子会话不在汇总范围内。
 - **非 DeepSeek 路由**（例如 Anthropic 兼容 provider）会按 DeepSeek 单价计算；本插件面向 DeepSeek 账号。
 
