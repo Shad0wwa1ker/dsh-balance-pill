@@ -1,6 +1,8 @@
-# dsh-balance-pill
+# dsh-per-request-cost
 
 中文 | [English](README.en.md)
+
+> 包名仍为 `@local/dsh-balance-pill`；仓库已改名为 `dsh-per-request-cost`，安装方式不变。
 
 一个 [DeepSeek Harness](https://github.com/deepseek-ai) 的 Web 界面插件，在输入框下方显示一枚紧凑的胶囊：
 

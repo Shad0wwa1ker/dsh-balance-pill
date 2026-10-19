@@ -1,6 +1,8 @@
-# dsh-balance-pill
+# dsh-per-request-cost
 
 English | [中文](README.md)
+
+> The package is still named `@local/dsh-balance-pill`; only the repository was renamed to `dsh-per-request-cost`. Installation is unchanged.
 
 A [DeepSeek Harness](https://github.com/deepseek-ai) Web-UI plugin that renders one compact pill under the composer:
 
